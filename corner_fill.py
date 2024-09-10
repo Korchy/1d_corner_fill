@@ -27,6 +27,8 @@ bl_info = {
 
 class CornerFill:
 
+    _err_steps = 3
+
     @classmethod
     def fill(cls, context, obj):
         # fills closed vertices loop with polygons loops starting from selected vertices
@@ -41,12 +43,40 @@ class CornerFill:
         bm.from_mesh(obj.data)
         bm.verts.ensure_lookup_table()
         bm.edges.ensure_lookup_table()
-        # get all closed loops
+        # get all bridges between selected vertices
         bridges = cls._vertices_bridges(bm=bm)
+        steps = 0
+        # try to process step by step until new bridges couldn't be created
+        while bridges:
+            steps += 1
 
-        print('ready bridges')
-        for bridge in bridges:
-            print(bridge)
+            print('ready bridges', 'step ', steps)
+            for bridge in bridges:
+                print([v.index for v in bridge])
+
+            # get corner vertices
+            corner_vertices = set(itertools.chain.from_iterable((bridge[0], bridge[-1]) for bridge in bridges))
+            # print([v.index for v in corner_vertices])
+
+            for vertex in corner_vertices:
+                # get 3 vertices based on corner vertex to create a face
+                link_bridges = [bridge for bridge in bridges if vertex in (bridge[0],bridge[-1])]
+                v1 = link_bridges[0][1] if link_bridges[0][0] == vertex else link_bridges[0][-2]
+                v2 = link_bridges[1][1] if link_bridges[1][0] == vertex else link_bridges[1][-2]
+                cls._face_from_vert(bm=bm, v0=vertex, v1=v1, v2=v2)
+
+
+            # for bridge in bridges:
+            #     # get first vertex (currently selected) and try to create face
+            #     pass
+
+
+            # cycling control
+            if steps >= cls._err_steps:
+                print('ERR processing mesh. Maybe cycling. Steps: ', steps)
+                break
+            # rebuild bridges for next step
+            bridges = cls._vertices_bridges(bm=bm)
 
         # save changed data to mesh
         bm.to_mesh(obj.data)
@@ -63,11 +93,6 @@ class CornerFill:
                             for vertex in bm.verts if vertex.select \
                             for edge in vertex.link_edges if len(edge.link_faces) <= 1 \
                                    and not edge.other_vert(vertex).select]      # two selected vertices near each other
-
-        print('possible bridges starts')
-        for b in possible_bridges_starts:
-            print(b)
-
         # for each start point of possible bridge - built full bridge
         max_bridge_len = len(bm.verts)
         for bridge in possible_bridges_starts:
@@ -107,6 +132,16 @@ class CornerFill:
             if next_edge:
                 next_vertex = next_edge.other_vert(vertex)
                 return next_vertex
+
+    @staticmethod
+    def _face_from_vert(bm, v0, v1, v2):
+        # create face from vertex
+        # create last vertex
+        v3_co = v0.co + ((v1.co - v0.co) + (v2.co - v0.co))
+        v3 = bm.verts.new(v3_co)
+        # create face from all four vertices
+        bm.faces.new((v0, v2, v3, v1))
+
 
     @staticmethod
     def ui(layout, context):
