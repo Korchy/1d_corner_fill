@@ -32,6 +32,7 @@ class CornerFill:
     @classmethod
     def fill(cls, context, op, obj):
         # fills closed vertices loop with polygons loops starting from selected vertices
+        obj = obj if obj else context.object
         # current mode
         mode = obj.mode
         # switch to OBJECT mode
@@ -128,9 +129,9 @@ class CornerFill:
         # get all vertices bridges between selected vertices
         bridges = []
         # for each selected vertex get all bridges started from it and following on clear edges
-        possible_bridges_starts = [[vertex, edge.other_vert(vertex)] \
-                            for vertex in bm.verts if vertex.select \
-                            for edge in vertex.link_edges if len(edge.link_faces) <= 1 \
+        possible_bridges_starts = [[vertex, edge.other_vert(vertex)]
+                                   for vertex in bm.verts if vertex.select
+                                   for edge in vertex.link_edges if len(edge.link_faces) <= 1
                                    and not edge.other_vert(vertex).select]      # two selected vertices near each other
 
         # print('possible_bridges_starts')
@@ -169,8 +170,8 @@ class CornerFill:
     @staticmethod
     def _next_vert(vertex, bridge):
         # get next vertex for bridge starting from vertex
-        possible_next_edges = [edge for edge in vertex.link_edges \
-                               if len(edge.link_faces) <= 1 \
+        possible_next_edges = [edge for edge in vertex.link_edges
+                               if len(edge.link_faces) <= 1
                                and edge.other_vert(vertex) not in bridge]
         if len(possible_next_edges) == 1:
             next_edge = next(iter(possible_next_edges), None)
