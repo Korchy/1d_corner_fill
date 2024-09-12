@@ -27,10 +27,10 @@ bl_info = {
 
 class CornerFill:
 
-    _err_steps = 1
+    _err_steps = 25
 
     @classmethod
-    def fill(cls, context, obj):
+    def fill(cls, context, op, obj):
         # fills closed vertices loop with polygons loops starting from selected vertices
         # current mode
         mode = obj.mode
@@ -50,9 +50,9 @@ class CornerFill:
         while bridges:
             steps += 1
 
-            print('ready bridges', 'step ', steps)
-            for bridge in bridges:
-                print([v.index for v in bridge])
+            # print('ready bridges', 'step ', steps)
+            # for bridge in bridges:
+            #     print([v.index for v in bridge])
 
             # get corner (selected on this step) vertices
             corner_vertices = set(itertools.chain.from_iterable((bridge[0], bridge[-1]) for bridge in bridges))
@@ -61,44 +61,60 @@ class CornerFill:
             # print([v.index for v in corner_vertices])
 
             # deselect all selected vertices - will select new vertices when processing this step
-            cls._deselect(bm=bm, vertices=True)
+            cls._deselect(bm=bm, faces=True, edges=True, vertices=True)
             # create new face on each corner vertex
             for vertex in corner_vertices:
+
+                # print('vertex', vertex.index)
+
                 # get 3 vertices based on corner vertex and create a face
-                link_bridges = [bridge for bridge in bridges if vertex in (bridge[0],bridge[-1])]
-                v1 = link_bridges[0][1] if link_bridges[0][0] == vertex else link_bridges[0][-2]
-                v2 = link_bridges[1][1] if link_bridges[1][0] == vertex else link_bridges[1][-2]
+                link_bridges = [bridge for bridge in bridges if vertex in (bridge[0], bridge[-1])]
 
-                # print('vertex, v1, v2')
-                # print(vertex.index, v1.index, v2.index)
+                # print('link bridges')
+                # for lb in link_bridges:
+                #     print([_v.index for _v in lb])
 
-                # create face on corner vertex
-                new_vert, new_face = cls._face_from_vert(bm=bm, v0=vertex, v1=v1, v2=v2)
-                # select new corner vertex for building new bridges on the next step
-                new_vert.select = True
-                # replace old corner vertex in brides with new one
-                for bridge in bridges:
-                    bridge[0] = new_vert if bridge[0] == vertex else bridge[0]
-                    bridge[-1] = new_vert if bridge[-1] == vertex else bridge[-1]
-                # create faces loops by bridges
-                for bridge in bridges:
-                    cls._face_loop_by_bridge(bm=bm, bridge=bridge)
+                # process only if this vertex has two linked bridges
+                #   filter if there is only one bridge between two vertices
+                if len(link_bridges) == 2:
+                    v1 = link_bridges[0][1] if link_bridges[0][0] == vertex else link_bridges[0][-2]
+                    v2 = link_bridges[1][1] if link_bridges[1][0] == vertex else link_bridges[1][-2]
 
+                    # print('vertex, v1, v2')
+                    # print(vertex.index, v1.index, v2.index)
 
-            print('modified bridges', 'step ', steps)
-            bm.verts.index_update()
+                    # create face on corner vertex
+                    new_vertex, new_face = cls._face_from_vert(bm=bm, v0=vertex, v1=v1, v2=v2)
+                    # select new corner vertex for building new bridges on the next step
+                    new_vertex.select = True
+                    # replace old corner vertex in brides with new one
+                    for bridge in bridges:
+                        bridge[0] = new_vertex if bridge[0] == vertex else bridge[0]
+                        bridge[-1] = new_vertex if bridge[-1] == vertex else bridge[-1]
+            # create faces loops by bridges
             for bridge in bridges:
-                print([v.index for v in bridge])
+                # all corner vertices on the bridge must be already processed
+                if bridge[0].index == -1 and bridge[-1].index == -1:
+                    cls._face_loop_by_bridge(bm=bm, bridge=bridge)
+            # update indices not to have index = -1 on the next step
+            bm.verts.index_update()
 
-
+            # print('modified bridges', 'step ', steps)
+            # for bridge in bridges:
+            #     print([v.index for v in bridge])
 
             # cycling control
             if steps >= cls._err_steps:
-                print('ERR processing mesh. Maybe cycling. Steps: ', steps)
+                print('ERR: Broking on max steps, maybe cycling. Steps: ', steps)
                 break
             # rebuild bridges for next step
             bridges = cls._vertices_bridges(bm=bm)
 
+        # err warning
+        if steps >= cls._err_steps:
+            op.report({'INFO'}, 'ERR: Interrupted on max available steps (' + str(steps) + ')')
+        else:
+            op.report({'INFO'}, 'OK: Processed with ' + str(steps) + ' steps')
         # recalculate normals
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         # save changed data to mesh
@@ -126,8 +142,10 @@ class CornerFill:
             # follow for the next vertices until it ends on another selected vertex or free vertex (drop bridge)
             if cls._build_bridge(bridge=bridge, max_steps=max_bridge_len):
                 # print(bridge)
-                if [bridge[-1], bridge[0]] not in [[br[0], br[-1]] for br in bridges]:
+                if [bridge[-1], bridge[0]] not in [[br[0], br[-1]] for br in bridges] \
+                        and len(bridge) > 3:
                     # don't add same bridges - if first-last vertices of one are last-first vertices of another
+                    # don't add bridge with 3 and less vertices (no improvements on next step)
                     bridges.append(bridge)
         return bridges
 
@@ -173,12 +191,29 @@ class CornerFill:
     @classmethod
     def _face_loop_by_bridge(cls, bm, bridge):
         # create face loop by vertices bridge (list of vertices)
-        first_vert = bridge[0]
-        last_vert = bridge[-1]
+        v0 = bridge[0]
+        last_vertex = bridge[-1]
         chunks = list(cls._chunks(lst=bridge[1:-1], n=2, offset=1))[:-1]
-        print('bridge', bridge)
-        print('chunks', list(chunks))
 
+        # print('bridge')
+        # print(bridge)
+        # print('chunks')
+        # print(list(chunks))
+
+        average_vector_co = ((v0.co - bridge[1].co) + (last_vertex.co - bridge[-2].co)) / 2
+
+        for chunk in chunks:
+            # create 4-th vertex
+            if chunk == chunks[-1]:
+                # for the last chunk, use last vertex instead creating new
+                v3 = last_vertex
+            else:
+                # v3 = bm.verts.new(chunk[1].co - chunk[1].normal * average_vector_co.length)
+                v3 = bm.verts.new(chunk[1].co + average_vector_co)
+            # create face from all 4 vertices
+            bm.faces.new((v0, chunk[0], chunk[1], v3))
+            # for next chunk, new v3 vertex will be the first v0 vertex
+            v0 = v3
 
     @staticmethod
     def _deselect(bm, faces=False, edges=False, vertices=False):
@@ -218,6 +253,7 @@ class CornerFill_OT_fill(Operator):
     def execute(self, context):
         CornerFill.fill(
             context=context,
+            op=self,
             obj=context.object
         )
         return {'FINISHED'}
